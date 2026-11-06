@@ -11,6 +11,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 
 const games = {
   test: require('./games/test'),
+  ai: require('./games/ai'),
 };
 
 // ---- DB ----

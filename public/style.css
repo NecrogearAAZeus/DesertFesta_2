@@ -31,7 +31,7 @@ h2 { font-size: 18px; }
   padding: 24px;
 }
 
-input, select {
+input, select, textarea {
   width: 100%;
   padding: 10px 12px;
   background: var(--bg);
@@ -40,7 +40,7 @@ input, select {
   border-radius: 6px;
   font: inherit;
 }
-input:focus, select:focus, .btn:focus-visible { outline: 2px solid var(--yellow); outline-offset: 1px; }
+input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px solid var(--yellow); outline-offset: 1px; }
 label { display: block; margin-bottom: 12px; color: var(--muted); }
 label > input, label > select { margin-top: 4px; color: var(--text); }
 label.check { display: flex; gap: 8px; align-items: flex-start; color: var(--text); }
