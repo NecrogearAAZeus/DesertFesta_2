@@ -1,0 +1,79 @@
+/* 색 토큰. 글자·버튼은 배경 대비 3.5:1 이상 (최저: 카드 위 빨강 4.11) */
+:root {
+  --bg: #1A120F;
+  --surface: #2A201C;
+  --line: #4A3C37;
+  --text: #F2E6E4;
+  --muted: #A99A93;
+  --red: #E8474B;
+  --yellow: #D8BD7F;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, "Malgun Gothic", sans-serif;
+}
+h1, h2 { margin: 0 0 12px; font-weight: 700; }
+h1 { font-size: 20px; }
+h2 { font-size: 18px; }
+.muted { color: var(--muted); }
+.accent { color: var(--yellow); }
+[hidden] { display: none !important; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+input, select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+input:focus, select:focus, .btn:focus-visible { outline: 2px solid var(--yellow); outline-offset: 1px; }
+label { display: block; margin-bottom: 12px; color: var(--muted); }
+label > input, label > select { margin-top: 4px; color: var(--text); }
+label.check { display: flex; gap: 8px; align-items: flex-start; color: var(--text); }
+label.check input { width: auto; margin-top: 4px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn.primary { background: var(--red); border-color: var(--red); color: var(--bg); }
+.btn:disabled { background: var(--line); border-color: var(--line); color: var(--muted); cursor: not-allowed; }
+.btn svg { width: 20px; height: 20px; fill: currentColor; }
+
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tabs .btn[aria-selected="true"] { border-color: var(--red); color: var(--red); }
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--red);
+  border-radius: 6px;
+}

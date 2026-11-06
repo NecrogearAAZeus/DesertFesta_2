@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>운영자</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { max-width: 560px; margin: 40px auto; padding: 0 16px; }
+  .row { display: flex; gap: 8px; margin-bottom: 16px; }
+  .row > * { flex: 1; }
+  #status { font-size: 18px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+<h1>운영자</h1>
+
+<div class="card">
+  <label>운영자 비밀번호<input id="pw" type="password" autocomplete="current-password"></label>
+  <p id="status" class="accent">비밀번호를 입력하세요</p>
+
+  <div class="row">
+    <select id="game-name" aria-label="게임">
+      <option value="test">버튼 누르기 (확인용)</option>
+    </select>
+    <button class="btn" id="pick">게임 전환</button>
+  </div>
+  <div class="row">
+    <button class="btn primary" id="start">판 시작</button>
+    <button class="btn" id="resolve">마감 · 결과 공개</button>
+  </div>
+  <button class="btn" id="export">참여자 CSV 받기</button>
+</div>
+
+<div id="toast" role="status" hidden></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const PHASE = { idle: '대기', playing: '진행 중', result: '결과 공개' };
+
+try { $('#pw').value = sessionStorage.getItem('adminPw') ?? ''; } catch {}
+$('#pw').oninput = () => { try { sessionStorage.setItem('adminPw', $('#pw').value); } catch {} };
+
+async function call(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'content-type': 'application/json', 'x-admin-password': $('#pw').value },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? '오류가 났습니다');
+  return res;
+}
+
+function show(s) { $('#status').textContent = `게임: ${s.name ?? '없음'} · 상태: ${PHASE[s.phase]}`; }
+
+let toastTimer;
+function toast(msg) {
+  $('#toast').textContent = msg;
+  $('#toast').hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => ($('#toast').hidden = true), 3000);
+}
+
+const act = (path, body) => call('POST', path, body).then((r) => r.json()).then(show).catch((e) => toast(e.message));
+$('#pick').onclick = () => act('/api/admin/game', { name: $('#game-name').value });
+$('#start').onclick = () => act('/api/admin/start', {});
+$('#resolve').onclick = () => act('/api/admin/resolve', {});
+
+$('#export').onclick = async () => {
+  try {
+    const blob = await (await call('GET', '/api/admin/export')).blob();
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'participants.csv' });
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { toast(e.message); }
+};
+
+setInterval(() => { if ($('#pw').value) call('GET', '/api/admin/state').then((r) => r.json()).then(show).catch(() => {}); }, 2000);
+</script>
+</body>
+</html>

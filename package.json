@@ -1,0 +1,11 @@
+{
+  "name": "pepero-day-2026",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/accept.test.mjs"
+  },
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}

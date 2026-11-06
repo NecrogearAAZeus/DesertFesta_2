@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>빼빼로데이 미니게임</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  #auth { max-width: 420px; margin: 80px auto; }
+  #main { display: grid; grid-template-columns: 1fr 360px; height: 100vh; }
+  #stage { padding: 24px; overflow: auto; }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
+  #chat { display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); min-height: 0; }
+  #chat-log { flex: 1; overflow-y: auto; padding: 12px 16px; margin: 0; list-style: none; }
+  #chat-log li { margin-bottom: 6px; word-break: break-all; }
+  #chat-log b { color: var(--yellow); margin-right: 6px; }
+  #chat-form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+
+<section id="auth" class="card" hidden>
+  <h1>빼빼로데이 미니게임</h1>
+  <div class="tabs" role="tablist">
+    <button class="btn" role="tab" data-tab="login" aria-selected="true">로그인</button>
+    <button class="btn" role="tab" data-tab="signup" aria-selected="false">회원가입</button>
+  </div>
+
+  <form id="login-form">
+    <label>FF14 ID<input name="ffxivId" required autocomplete="username"></label>
+    <label>비밀번호<input name="password" type="password" required autocomplete="current-password"></label>
+    <button class="btn primary">로그인</button>
+  </form>
+
+  <form id="signup-form" hidden>
+    <label>FF14 ID (캐릭터 이름)<input name="ffxivId" required maxlength="30" autocomplete="username"></label>
+    <label>비밀번호 (4자 이상)<input name="password" type="password" required minlength="4" autocomplete="new-password"></label>
+    <label>이메일 (기프티콘 받을 곳)<input name="email" type="email" required maxlength="100"></label>
+    <label>좋아하는 빼빼로
+      <select name="pepero" required>
+        <option value="1">1번 맛</option><option value="2">2번 맛</option><option value="3">3번 맛</option>
+        <option value="4">4번 맛</option><option value="5">5번 맛</option>
+      </select>
+    </label>
+    <label class="check"><input name="consent" type="checkbox" required>이메일은 기프티콘 발송에만 쓰고, 행사가 끝나면 파기합니다. 동의합니다.</label>
+    <button class="btn primary">가입하기</button>
+  </form>
+</section>
+
+<div id="main" hidden>
+  <main id="stage">
+    <header><h1>빼빼로데이 미니게임</h1><span class="muted" id="me"></span></header>
+    <div id="game" class="card"></div>
+  </main>
+  <aside id="chat">
+    <ul id="chat-log" aria-live="polite"></ul>
+    <form id="chat-form">
+      <input name="text" maxlength="300" placeholder="채팅 (3초에 한 번)" autocomplete="off" aria-label="채팅 입력">
+      <button class="btn primary" aria-label="보내기">
+        <svg viewBox="0 -960 960 960" aria-hidden="true"><path d="M120-160v-640l760 320-760 320Zm80-120 474-200-474-200v140l240 60-240 60v140Z"/></svg>
+      </button>
+    </form>
+  </aside>
+</div>
+
+<div id="toast" role="status" hidden></div>
+
+<script>window.GAMES = {};</script>
+<script src="games/test.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(json.error ?? '오류가 났습니다'), { status: res.status });
+  return json;
+}
+
+let toastTimer;
+function toast(msg) {
+  $('#toast').textContent = msg;
+  $('#toast').hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => ($('#toast').hidden = true), 3000);
+}
+
+// ---- 로그인 / 가입 ----
+document.querySelectorAll('[data-tab]').forEach((tab) => {
+  tab.onclick = () => {
+    document.querySelectorAll('[data-tab]').forEach((t) => t.setAttribute('aria-selected', t === tab));
+    $('#login-form').hidden = tab.dataset.tab !== 'login';
+    $('#signup-form').hidden = tab.dataset.tab !== 'signup';
+  };
+});
+
+$('#login-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try { await api('/api/login', { ffxivId: f.get('ffxivId'), password: f.get('password') }); poll(); }
+  catch (err) { toast(err.message); }
+};
+
+$('#signup-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    await api('/api/signup', {
+      ffxivId: f.get('ffxivId'), password: f.get('password'), email: f.get('email'),
+      pepero: Number(f.get('pepero')), consent: f.get('consent') === 'on',
+    });
+    poll();
+  } catch (err) { toast(err.message); }
+};
+
+// ---- 채팅 ----
+let lastChatId = 0;
+function addChat(messages) {
+  const log = $('#chat-log');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  for (const m of messages) {
+    const li = document.createElement('li');
+    li.innerHTML = `<b>${esc(m.ffxivId)}</b>${esc(m.text)}`;
+    log.append(li);
+    lastChatId = m.id;
+  }
+  while (log.children.length > 200) log.firstChild.remove();
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+$('#chat-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const input = e.target.text;
+  const btn = e.target.querySelector('button');
+  if (!input.value.trim() || btn.disabled) return;
+  try {
+    await api('/api/chat', { text: input.value });
+    input.value = '';
+    btn.disabled = true;
+    setTimeout(() => (btn.disabled = false), 3000);
+    poll();
+  } catch (err) { toast(err.message); }
+};
+
+// ---- 게임 ----
+let shownGame = null;
+function renderGame(s) {
+  const el = $('#game');
+  const key = `${s.game.name}:${s.game.phase === 'idle' ? 'idle' : 'on'}`;
+  if (key !== shownGame) { el.innerHTML = ''; shownGame = key; }
+  const game = window.GAMES[s.game.name];
+  if (!game || s.game.phase === 'idle') {
+    el.innerHTML = '<h2>잠시 기다려 주세요</h2><p class="muted">운영자가 다음 판을 시작하면 바로 참여할 수 있습니다.</p>';
+    return;
+  }
+  game.render(el, s, (input) => api('/api/act', { input }).catch((err) => toast(err.message)));
+}
+
+// ---- 폴링 (1초) ----
+let polling = false;
+async function poll() {
+  if (polling) return;
+  polling = true;
+  try {
+    const s = await api(`/api/state?chatAfter=${lastChatId}`);
+    $('#auth').hidden = true;
+    $('#main').hidden = false;
+    $('#me').textContent = s.me.ffxivId;
+    addChat(s.chat);
+    renderGame(s);
+  } catch (err) {
+    if (err.status === 401) { $('#main').hidden = true; $('#auth').hidden = false; }
+  } finally {
+    polling = false;
+  }
+}
+poll();
+setInterval(() => { if ($('#auth').hidden) poll(); }, 1000); // 로그인 화면에선 멈춤 (로그인·가입 성공 시 poll()로 재개)
+</script>
+</body>
+</html>
