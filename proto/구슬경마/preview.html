@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>구슬경마 미리보기</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b1420; color: #eee; font: 14px sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #hud { position: fixed; left: 8px; top: 8px; background: #0008; padding: 6px 10px; border-radius: 6px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script src="race-data.js"></script>
+<script>
+// 키: 스페이스 = 처음부터, 1/2/4 = 재생 속도
+const R = window.RACE, cv = document.getElementById('c'), ctx = cv.getContext('2d'), hud = document.getElementById('hud');
+const N = R.marbles.length, VIEW_H = 800; // 메인 화면에 보이는 월드 높이
+let t0 = performance.now(), speed = 1, camY = 0;
+addEventListener('keydown', (e) => {
+  if (e.key === ' ') { t0 = performance.now(); camY = 0; }
+  if ('124'.includes(e.key)) { const t = now(); speed = +e.key; t0 = performance.now() - (t * 1000) / speed; }
+});
+const now = () => ((performance.now() - t0) / 1000) * speed; // 경주 시각(초)
+
+function resize() { cv.width = innerWidth; cv.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+// 녹화 프레임 사이를 선형 보간
+function positions(t) {
+  const f = t * R.fps, i = Math.min(Math.floor(f), R.frames.length - 1), j = Math.min(i + 1, R.frames.length - 1), a = f - i;
+  const A = R.frames[i], B = R.frames[j], out = [];
+  for (let k = 0; k < N; k++) out.push([A[2 * k] + (B[2 * k] - A[2 * k]) * a, A[2 * k + 1] + (B[2 * k + 1] - A[2 * k + 1]) * a]);
+  return out;
+}
+
+function drawMap(s, minimap) {
+  for (const it of R.map) {
+    if (it.t === 's') {
+      ctx.fillStyle = it.f > 1 ? '#2f8f4f55' : '#a0303055';
+      ctx.fillRect(it.x - it.w / 2, it.y - it.h / 2, it.w, it.h);
+      if (!minimap) { ctx.fillStyle = '#fff8'; ctx.font = '20px sans-serif'; ctx.fillText(it.f > 1 ? '가속 ▼' : '감속 ■', it.x - 30, it.y - 30); }
+    } else if (it.t === 'c') {
+      ctx.fillStyle = '#e9c46a'; ctx.beginPath(); ctx.arc(it.x, it.y, it.r, 0, 7); ctx.fill();
+    } else {
+      ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(it.a); ctx.fillStyle = '#8ab4f8'; ctx.fillRect(-it.w / 2, -it.h / 2, it.w, it.h); ctx.restore();
+    }
+  }
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, R.finishY, R.W, minimap ? 20 : 4);
+}
+
+function frame() {
+  const t = now(), pos = positions(t);
+  const done = new Set(R.finishes.filter((f) => f.t <= t).map((f) => f.id));
+  // 선두 = 아직 도착 안 한 구슬 중 가장 아래. 다 도착하면 결승선
+  let lead = R.finishY;
+  const running = pos.filter((_, k) => !done.has(k)).map((p) => p[1]);
+  if (running.length) lead = Math.max(...running);
+  const target = Math.min(Math.max(lead - VIEW_H * 0.35, 0), R.H - VIEW_H);
+  camY += (target - camY) * 0.08; // 부드럽게 따라가기
+
+  const mmW = 90, mainW = cv.width - mmW - 16, s = Math.min(mainW / R.W, cv.height / VIEW_H), ox = (mainW - R.W * s) / 2;
+  ctx.fillStyle = '#1b1420'; ctx.fillRect(0, 0, cv.width, cv.height);
+
+  // 메인 화면
+  ctx.save(); ctx.translate(ox, 0); ctx.scale(s, s); ctx.translate(0, -camY);
+  ctx.fillStyle = '#2a2033'; ctx.fillRect(0, camY, R.W, VIEW_H * 2);
+  drawMap(s, false);
+  ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+  pos.forEach(([x, y], k) => {
+    const m = R.marbles[k];
+    ctx.fillStyle = m.color; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, m.r, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.fillText(m.name, x, y - m.r - 4);
+  });
+  ctx.restore(); ctx.textAlign = 'left';
+
+  // 미니맵 (오른쪽 세로 막대)
+  const ms = (cv.height - 20) / R.H, mx = cv.width - mmW - 8 + (mmW - R.W * ms) / 2;
+  ctx.save(); ctx.translate(mx, 10); ctx.scale(ms, ms);
+  ctx.fillStyle = '#2a2033'; ctx.fillRect(0, 0, R.W, R.H);
+  drawMap(ms, true);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 / ms; ctx.strokeRect(0, camY, R.W, VIEW_H);
+  pos.forEach(([x, y], k) => { ctx.fillStyle = R.marbles[k].color; ctx.beginPath(); ctx.arc(x, y, 6 / ms, 0, 7); ctx.fill(); });
+  ctx.restore();
+
+  // 순위: 도착 순 → 나머지는 y 큰 순
+  const order = [...R.finishes.filter((f) => f.t <= t).map((f) => f.id),
+    ...pos.map((p, k) => [p[1], k]).filter(([, k]) => !done.has(k)).sort((a, b) => b[0] - a[0]).map(([, k]) => k)];
+  const end = R.frames.length / R.fps;
+  hud.innerHTML = `${Math.min(t, end).toFixed(1)}s / ${end.toFixed(1)}s · seed ${R.seed} · x${speed}<br>` +
+    order.map((k, i) => `${i + 1}. <span style="color:${R.marbles[k].color}">●</span> ${R.marbles[k].name}` +
+      (done.has(k) ? ` ${R.finishes.find((f) => f.id === k).t}s` : '')).join('<br>') +
+    '<br><small>스페이스: 처음부터 · 1/2/4: 속도</small>';
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
