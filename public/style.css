@@ -18,7 +18,7 @@ body {
   font: 15px/1.5 system-ui, "Malgun Gothic", sans-serif;
 }
 h1, h2 { margin: 0 0 12px; font-weight: 700; }
-h1 { font-size: 20px; }
+h1 { font-size: 24px; }
 h2 { font-size: 18px; }
 .muted { color: var(--muted); }
 .accent { color: var(--yellow); }
@@ -27,8 +27,8 @@ h2 { font-size: 18px; }
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 20px;
+  border-radius: 12px;
+  padding: 24px;
 }
 
 input, select {
