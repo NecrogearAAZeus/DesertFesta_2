@@ -2,7 +2,7 @@
   "name": "pepero-day-2026",
   "private": true,
   "scripts": {
-    "start": "node server.js",
+    "start": "node --env-file=.env server.js",
     "test": "node --test test/accept.test.mjs"
   },
   "dependencies": {

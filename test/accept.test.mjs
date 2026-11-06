@@ -1,12 +1,13 @@
 // 뼈대 인수 테스트 (ATDD). 실제 띄운 서버에 HTTP로 요청한다.
-// 실행: docker compose up -d 후  node --test test/
-// 환경: BASE_URL (기본 http://localhost:3000), ADMIN_PASSWORD (.env와 같게)
-import { test } from 'node:test';
+// 실행: npm test  (테스트가 server.js를 포트 3100에 직접 띄우고 끈다. 개발 서버 3000과 안 부딪힘)
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 
-const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
-const ADMIN = process.env.ADMIN_PASSWORD ?? 'test-admin';
+const PORT = 3100;
+const BASE = `http://localhost:${PORT}`;
+const ADMIN = 'test-admin';
 const run = Date.now().toString(36);
 let seq = 0;
 
@@ -44,6 +45,19 @@ async function waitUp() {
   throw new Error('서버가 30초 안에 응답하지 않음');
 }
 
+let server;
+async function startServer() {
+  server = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT: String(PORT), ADMIN_PASSWORD: ADMIN }, stdio: 'ignore' });
+  await waitUp();
+}
+async function stopServer() {
+  if (server.exitCode !== null) return;
+  server.kill();
+  await once(server, 'exit');
+}
+before(startServer);
+after(stopServer);
+
 test('1. 서버가 응답한다', async () => {
   const r = await fetch(BASE + '/');
   assert.equal(r.status, 200);
@@ -62,8 +76,8 @@ test('2. 재시작 후에도 세션 유지 + 중복 가입 거부', async () => 
   const bad = await api('/api/login', { body: { ffxivId: u.ffxivId, password: 'wrong' } });
   assert.equal(bad.status, 401);
 
-  execSync('docker compose restart app', { stdio: 'ignore' });
-  await waitUp();
+  await stopServer();
+  await startServer();
 
   const s = await api('/api/state', { cookie: login.cookie });
   assert.equal(s.status, 200);
