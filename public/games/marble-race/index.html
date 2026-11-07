@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>파판14 초코보 구슬 경마</title>
+  <style>
+    * { box-sizing: border-box; user-select: none; margin: 0; padding: 0; }
+    body, html {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #14110e; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+      color: #fff;
+    }
+
+    /* 메인 레이스 캔버스 */
+    #mainCanvas {
+      width: 100vw; height: 100vh; display: block;
+    }
+
+    /* 상단 사운드 자막 컨테이너 ("OO 사운드 소리" 표시용) */
+    #soundSubtitleContainer {
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      z-index: 100; display: flex; flex-direction: column; align-items: center;
+      gap: 6px; pointer-events: none;
+    }
+    .sound-subtitle-toast {
+      background: rgba(15, 15, 22, 0.88);
+      border: 1.5px solid #ffd700;
+      border-radius: 20px;
+      padding: 6px 18px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #ffea8a;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+      animation: fadeSlideIn 0.2s ease-out;
+    }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 우측 상단 타이머 & 트랙/배수 정보 */
+    #topRightHud {
+      position: fixed; top: 16px; right: 20px; z-index: 40;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+    }
+    .timer-box {
+      background: linear-gradient(180deg, #2d251e 0%, #1a1512 100%);
+      border: 2px solid #c8a25a; border-radius: 10px;
+      padding: 8px 18px; text-align: center;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.7);
+    }
+    .timer-label { font-size: 11px; color: #d4b872; letter-spacing: 1px; }
+    #timerValue { font-size: 28px; font-weight: 900; color: #fff; font-variant-numeric: tabular-nums; }
+    .race-meta {
+      background: rgba(0,0,0,0.65); border: 1px solid #7a633a;
+      padding: 4px 12px; border-radius: 6px; font-size: 12px; color: #f0d890;
+    }
+
+    /* 좌측 상단 파판14 초코보 레이스 스타일 순위표 (source: 5 완벽 재현) */
+    #rankBoard {
+      position: fixed; top: 18px; left: 18px; z-index: 40;
+      width: 270px; display: flex; flex-direction: column; gap: 5px;
+      pointer-events: none;
+    }
+    .rank-row {
+      display: flex; align-items: center; gap: 8px;
+      background: linear-gradient(90deg, rgba(25,20,16,0.92) 0%, rgba(40,32,24,0.75) 85%, rgba(40,32,24,0) 100%);
+      padding: 4px 10px 4px 6px; border-radius: 6px;
+      border-left: 3px solid #8c734b;
+    }
+    .rank-row.my-rank-row {
+      margin-top: 10px;
+      background: linear-gradient(90deg, rgba(20,45,75,0.95) 0%, rgba(30,65,100,0.85) 85%, rgba(30,65,100,0) 100%);
+      border-left: 4px solid #4fc3f7;
+      box-shadow: 0 0 12px rgba(79, 195, 247, 0.4);
+    }
+    .rank-num {
+      width: 26px; font-size: 22px; font-weight: 900; color: #e0e0e0;
+      text-align: center; text-shadow: 2px 2px 3px #000;
+      font-family: Georgia, serif;
+    }
+    .rank-num.rank-1 { color: #ffd700; }
+    .rank-num.rank-2 { color: #e0e8f0; }
+    .rank-num.rank-3 { color: #d99058; }
+    .marble-badge {
+      width: 24px; height: 24px; border-radius: 50%;
+      border: 2px solid #fff; box-shadow: inset -3px -3px 6px rgba(0,0,0,0.5), 0 2px 4px #000;
+      flex-shrink: 0;
+    }
+    .rank-info { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+    .rank-name-line {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 13px; font-weight: 700; color: #f5ebd6;
+      text-shadow: 1px 1px 2px #000;
+    }
+    .num-tag {
+      display: inline-block; padding: 0 4px; border-radius: 3px;
+      background: #2e6b3e; color: #fff; font-size: 11px; font-weight: 800;
+    }
+    .my-rank-row .num-tag { background: #1e88e5; }
+    .progress-bar-wrap {
+      position: relative; width: 100%; height: 11px;
+      background: #1e1610; border: 1px solid #9c804e; border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #d4a838 0%, #76e05e 100%);
+      transition: width 0.1s linear;
+    }
+    .progress-pct-text {
+      position: absolute; right: 4px; top: -2px;
+      font-size: 12px; font-weight: 900; color: #fff;
+      text-shadow: 1px 1px 2px #000, -1px -1px 2px #000;
+    }
+
+    /* 파판14 보스 시전 바 (캐스팅 바) & 대사 UI */
+    #bossCastOverlay {
+      position: fixed; top: 95px; left: 50%; transform: translateX(-50%);
+      z-index: 60; display: none; flex-direction: column; align-items: center; gap: 8px;
+      pointer-events: none;
+    }
+    .boss-dialogue {
+      background: linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(45,10,15,0.92) 20%, rgba(45,10,15,0.92) 80%, rgba(0,0,0,0) 100%);
+      border-top: 1px solid #ff5252; border-bottom: 1px solid #ff5252;
+      padding: 8px 40px; font-size: 20px; font-weight: 900; color: #ffebee;
+      text-shadow: 0 0 10px #ff1744, 2px 2px 3px #000;
+    }
+    .ff14-castbar-box {
+      width: 380px; background: rgba(20, 16, 14, 0.9);
+      border: 2px solid #c99e52; border-radius: 6px; padding: 6px 10px;
+      box-shadow: 0 0 16px rgba(255, 152, 0, 0.5);
+    }
+    .ff14-cast-title {
+      display: flex; justify-content: space-between;
+      font-size: 14px; font-weight: 800; color: #ffe082; margin-bottom: 4px;
+    }
+    .ff14-cast-track {
+      width: 100%; height: 14px; background: #1a120b;
+      border: 1px solid #ffb74d; border-radius: 4px; overflow: hidden;
+    }
+    #bossCastFill {
+      width: 0%; height: 100%;
+      background: linear-gradient(90deg, #e65100 0%, #ffca28 100%);
+    }
+
+    /* 우측 하단 꼴찌 전용 PIP 카메라 */
+    #pipContainer {
+      position: fixed; bottom: 20px; right: 20px; z-index: 40;
+      width: 250px; height: 190px;
+      background: #1a1612; border: 3px solid #c8a25a; border-radius: 12px;
+      overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,0.8);
+    }
+    .pip-header {
+      position: absolute; top: 0; left: 0; right: 0;
+      background: rgba(180, 30, 30, 0.85); color: #fff;
+      font-size: 12px; font-weight: 800; padding: 4px 10px;
+      display: flex; justify-content: space-between; align-items: center;
+      z-index: 2;
+    }
+    #pipCanvas { width: 100%; height: 100%; display: block; }
+
+    /* 60초 종료 후 1등 & 꼴찌 결과 발표 모달 */
+    #resultModal {
+      position: fixed; inset: 0; z-index: 90;
+      background: rgba(0, 0, 0, 0.82);
+      display: none; align-items: center; justify-content: center;
+    }
+    .result-card {
+      width: 480px; background: linear-gradient(180deg, #2b2218 0%, #17120c 100%);
+      border: 3px solid #d4af37; border-radius: 16px; padding: 28px;
+      text-align: center; box-shadow: 0 0 40px rgba(212, 175, 55, 0.4);
+    }
+    .result-title {
+      font-size: 26px; font-weight: 900; color: #ffd700; margin-bottom: 20px;
+      text-shadow: 0 2px 6px #000;
+    }
+    .winner-box, .loser-box {
+      background: rgba(255,255,255,0.06); border-radius: 12px;
+      padding: 16px; margin-bottom: 14px; border: 1px solid rgba(255,255,255,0.15);
+    }
+    .winner-box { border-color: #ffd700; background: rgba(255, 215, 0, 0.1); }
+    .loser-box { border-color: #ef5350; background: rgba(239, 83, 80, 0.1); }
+    .result-badge-label { font-size: 13px; font-weight: 800; margin-bottom: 6px; }
+    .winner-box .result-badge-label { color: #ffd700; }
+    .loser-box .result-badge-label { color: #ff8a80; }
+    .result-player-name { font-size: 24px; font-weight: 900; color: #fff; }
+    .result-player-pct { font-size: 14px; color: #ccc; margin-top: 4px; }
+
+    /* 로컬 단독 테스트용 컨트롤 바 (서버 연동 시 자동 숨김 가능) */
+    #devControls {
+      position: fixed; bottom: 20px; left: 20px; z-index: 95;
+      background: rgba(20, 20, 25, 0.9); border: 1px solid #666;
+      padding: 10px 14px; border-radius: 10px; display: flex; gap: 8px; align-items: center;
+      font-size: 12px;
+    }
+    #devControls.server-connected { display: none; }
+    #devControls select, #devControls button {
+      background: #2c2c34; color: #fff; border: 1px solid #888;
+      padding: 5px 10px; border-radius: 6px; cursor: pointer; font-weight: 700;
+    }
+    #devControls button:hover { background: #444452; }
+    #devControls { max-width: calc(100vw - 300px); flex-wrap: wrap; gap: 7px; padding: 10px 12px; }
+    #devControls input { background:#252934; color:#e9dcc1; border:1px solid #6f675b; border-radius:5px; padding:5px 8px; width:145px; }
+    #devControls input[type=checkbox] { width:auto; }
+    #rankBoard { width:235px; }
+    .rank-name-line { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    #bossCastOverlay { top:24px; }
+    #bossCastOverlay[data-boss=zodiark] .boss-dialogue { border-color:#ad85ed; text-shadow:0 0 12px #9258e8; }
+    #bossCastOverlay[data-boss=zodiark] #bossCastFill { background:linear-gradient(90deg,#644199,#d8b4ff); }
+    .boss-dialogue { font-size:17px; padding:8px 22px; }
+    #courseStatus { color:#f4d499; font-size:12px; }
+    #finishStatus { position:fixed; bottom:100px; left:20px; z-index:40; color:#d9d2c4; font-size:12px; background:#141923cc; padding:7px 10px; border-left:2px solid #bc9d63; }
+    #soundSubtitleContainer { top:auto; bottom:114px; left:55%; max-width:440px; }
+    .pip-header { font-size:10px; height:25px; gap:8px; white-space:nowrap; }
+    #pipLastName { overflow:hidden; text-overflow:ellipsis; }
+    .sound-subtitle-toast { font-size:11px; }
+    @media(max-width:1000px){#devControls{max-width:calc(100vw - 280px);}#rankBoard{width:190px;}#bossCastOverlay{top:110px;}#finishStatus{bottom:130px;}}
+  </style>
+</head>
+<body>
+
+  <!-- 상단 사운드 대체 자막 ("🔊 [OO 사운드 소리]") -->
+  <div id="soundSubtitleContainer"></div>
+
+  <!-- 좌측 상단 초코보 레이스 순위 UI (1~7위 + 내 구슬) -->
+  <div id="rankBoard">
+    <div id="topRanksList"></div>
+    <div id="myRankContainer"></div>
+  </div>
+
+  <!-- 우측 상단 60초 타이머 및 배수 표시 -->
+  <div id="topRightHud">
+    <div class="timer-box">
+      <div class="timer-label">TIME REMAINING</div>
+      <div id="timerValue">60.00</div>
+    </div>
+    <div class="race-meta" id="raceMetaText">Track 1 | 방해공작 1x</div>
+    <div id="courseStatus">출발 대기</div>
+  </div>
+
+  <!-- 파판14 보스 기믹 캐스팅 바 & 대사 오버레이 -->
+  <div id="bossCastOverlay">
+    <div class="boss-dialogue" id="bossDialogueText">"세상만물 내뜻대로!!!!"</div>
+    <div class="ff14-castbar-box">
+      <div class="ff14-cast-title">
+        <span id="bossSkillName">조디아크: 삼라만상 회전</span>
+        <span id="bossCastTime">2.5s</span>
+      </div>
+      <div class="ff14-cast-track">
+        <div id="bossCastFill"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 우측 하단 꼴찌 클로즈업 PIP 화면 -->
+  <div id="pipContainer">
+    <div class="pip-header">
+      <span>꼴찌 LIVE</span>
+      <span id="pipLastName">-</span>
+    </div>
+    <canvas id="pipCanvas" width="250" height="190"></canvas>
+  </div>
+
+  <!-- 60초 종료 결과 모달 (1등 & 꼴찌 발표) -->
+  <div id="resultModal">
+    <div class="result-card">
+      <div class="result-title">🏁 초코보 구슬 경마 최종 결과</div>
+      <div class="winner-box">
+        <div class="result-badge-label">👑 영광의 1등 (FIRST PLACE)</div>
+        <div class="result-player-name" id="winnerName">-</div>
+        <div class="result-player-pct" id="winnerDetail">-</div>
+      </div>
+      <div class="loser-box">
+        <div class="result-badge-label">💀 대망의 꼴찌 (LAST PLACE - 최저 진행도%)</div>
+        <div class="result-player-name" id="loserName">-</div>
+        <div class="result-player-pct" id="loserDetail">-</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 테스트 및 단독 실행용 빠른 시작 패널 (서버 신호 수신 시에도 동일 동작) -->
+  <div id="devControls">
+    <span>맵:</span>
+    <select id="selectTrack">
+      <option value="1">트랙 1 (해안가 U자)</option>
+      <option value="2">트랙 2 (협곡 루프)</option>
+      <option value="3">트랙 3 (외길 세로 협곡)</option>
+    </select>
+    <span>방해 배수:</span>
+    <select id="selectHazard">
+      <option value="1">1배 (기본)</option>
+      <option value="2">2배 (혼파망)</option>
+      <option value="3">3배 (도파민 폭발)</option>
+    </select>
+    <label>구슬 <select id="selectPlayers"><option value="20">20명</option><option value="28" selected>28명</option><option value="40">40명</option></select></label>
+    <input id="seedInput" aria-label="경주 시드" value="desert-festa-preview" title="같은 값으로 다시 시작하면 같은 경주가 재생됩니다">
+    <button id="btnTestStart">같은 경주 다시 시작</button>
+    <button id="btnNewSeed">새 경주</button>
+    <label><input type="checkbox" id="reduceMotion">회전·흔들림 줄이기</label>
+  </div>
+  <div id="finishStatus"></div>
+
+  <!-- 메인 게임 캔버스 -->
+  <canvas id="mainCanvas"></canvas>
+
+  <script type="module" src="./game.js"></script>
+</body>
+</html>

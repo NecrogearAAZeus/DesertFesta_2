@@ -1,186 +1,184 @@
-// 공통 서버: 가입/로그인, 세션, 채팅, 폴링, 운영자 API. (docs/스펙.md §6)
-// 이 파일은 한 사람만 고친다. 게임 로직은 games/*.js 에.
+// server.js
+require('dotenv').config(); // 동일 위치의 .env 파일 로드
 const express = require('express');
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const { DatabaseSync } = require('node:sqlite');
+const path = require('path');
+const crypto = require('crypto');
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-if (!ADMIN_PASSWORD) throw new Error('.env에 ADMIN_PASSWORD가 필요합니다');
-const PORT = Number(process.env.PORT ?? 3000);
+const app = express();
+const PORT = process.env.PORT || 3000;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234';
 
-const games = {
-  test: require('./games/test'),
-  ai: require('./games/ai'),
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// public 폴더 정적 호스팅 (public/games/marble-race/index.html 등 접근 가능)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ============================================================================
+// 실시간 구슬 경마 상태 & 참가자 & SSE(Server-Sent Events) 클라이언트 관리
+// ============================================================================
+const sseClients = new Set();     // 실시간 중계를 보고 있는 브라우저 목록
+const participants = new Set();   // 현재 참가 신청한 유저 닉네임 목록 (20~40명)
+let raceEndTimer = null;
+
+function isRaceAdmin(req) {
+  return Boolean(process.env.ADMIN_PASSWORD) && req.get('x-admin-password') === ADMIN_PASSWORD;
+}
+
+function requireRaceAdmin(req, res, next) {
+  if (!isRaceAdmin(req)) return res.status(403).json({ ok: false, message: '관리자 인증이 필요합니다.' });
+  next();
+}
+
+let currentRaceState = {
+  status: 'waiting',              // 'waiting' | 'running' | 'finished'
+  seed: null,
+  trackId: 1,
+  hazardMultiplier: 1,
+  players: [],
+  startedAt: null
 };
 
-// ---- DB ----
-fs.mkdirSync('data', { recursive: true });
-const db = new DatabaseSync('data/app.db');
-db.exec(`
-PRAGMA journal_mode = WAL;
-CREATE TABLE IF NOT EXISTS users (
-  id              INTEGER PRIMARY KEY,
-  email           TEXT NOT NULL UNIQUE,
-  ffxiv_id        TEXT NOT NULL UNIQUE,
-  password_hash   TEXT NOT NULL,
-  pepero          INTEGER NOT NULL CHECK (pepero BETWEEN 1 AND 5),
-  consent_at      TEXT NOT NULL,
-  participated_at TEXT,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token      TEXT PRIMARY KEY,
-  user_id    INTEGER NOT NULL REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);`);
-
-function hashPassword(pw) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  return `${salt}:${crypto.scryptSync(pw, salt, 64).toString('hex')}`;
-}
-function checkPassword(pw, stored) {
-  const [salt, hash] = stored.split(':');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), crypto.scryptSync(pw, salt, 64));
-}
-
-// ---- 메모리 상태 (재시작 시 사라짐. 누적 점수가 없으므로 허용) ----
-// ponytail: 채팅·게임 상태 메모리 보관, 재시작 보존이 필요해지면 DB 테이블로
-const chat = [];             // { id, ffxivId, text, at }
-let chatSeq = 0;
-const lastChatAt = new Map(); // userId → ms
-const CHAT_KEEP = 200;
-const CHAT_COOLDOWN_MS = 3000;
-const CHAT_MAX_LEN = 300;
-
-const current = { name: null, phase: 'idle' }; // phase: idle | playing | result
-
-// ---- HTTP ----
-const app = express();
-app.use(express.json({ limit: '10kb' }));
-app.use(express.static('public'));
-
-function setSession(res, userId) {
-  const token = crypto.randomBytes(32).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id) VALUES (?, ?)').run(token, userId);
-  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);
-}
-
-function auth(req, res, next) {
-  const token = /(?:^|;\s*)sid=([0-9a-f]+)/.exec(req.headers.cookie ?? '')?.[1];
-  const user = token && db.prepare(
-    'SELECT u.id, u.ffxiv_id AS ffxivId FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?'
-  ).get(token);
-  if (!user) return res.status(401).json({ error: '로그인이 필요합니다' });
-  req.user = { id: user.id, ffxivId: user.ffxivId };
-  next();
-}
-
-function admin(req, res, next) {
-  if (req.headers['x-admin-password'] !== ADMIN_PASSWORD) return res.status(403).json({ error: '운영자 비밀번호가 틀렸습니다' });
-  next();
-}
-
-const str = (v) => (typeof v === 'string' ? v.trim() : '');
-
-app.post('/api/signup', (req, res) => {
-  const email = str(req.body.email);
-  const password = typeof req.body.password === 'string' ? req.body.password : '';
-  const ffxivId = str(req.body.ffxivId);
-  const pepero = Number(req.body.pepero);
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 100) return res.status(400).json({ error: '이메일 형식이 올바르지 않습니다' });
-  if (password.length < 4 || password.length > 100) return res.status(400).json({ error: '비밀번호는 4~100자입니다' });
-  if (!ffxivId || ffxivId.length > 30) return res.status(400).json({ error: 'FF14 ID는 1~30자입니다' });
-  if (!Number.isInteger(pepero) || pepero < 1 || pepero > 5) return res.status(400).json({ error: '선호 빼빼로를 골라 주세요' });
-  if (req.body.consent !== true) return res.status(400).json({ error: '개인정보 수집에 동의해야 가입할 수 있습니다' });
-  try {
-    const { lastInsertRowid } = db.prepare(
-      "INSERT INTO users (email, ffxiv_id, password_hash, pepero, consent_at) VALUES (?, ?, ?, ?, datetime('now'))"
-    ).run(email, ffxivId, hashPassword(password), pepero);
-    setSession(res, Number(lastInsertRowid));
-    res.json({ ok: true });
-  } catch (e) {
-    if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: '이미 가입된 이메일 또는 FF14 ID입니다' });
-    throw e;
+// 연결된 모든 유저 브라우저에 이벤트 실시간 전송
+function broadcast(eventType, payload) {
+  const data = JSON.stringify({ type: eventType, payload });
+  for (const clientRes of sseClients) {
+    clientRes.write(`data: ${data}\n\n`);
   }
-});
+}
 
-app.post('/api/login', (req, res) => {
-  const row = db.prepare('SELECT id, password_hash FROM users WHERE ffxiv_id = ?').get(str(req.body.ffxivId));
-  const password = typeof req.body.password === 'string' ? req.body.password : '';
-  if (!row || !checkPassword(password, row.password_hash)) return res.status(401).json({ error: 'FF14 ID 또는 비밀번호가 틀렸습니다' });
-  setSession(res, row.id);
-  res.json({ ok: true });
-});
+// ============================================================================
+// 1. 클라이언트 실시간 스트림 연결 엔드포인트 (SSE)
+// ============================================================================
+app.get('/api/marble-race/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
 
-app.get('/api/state', auth, (req, res) => {
-  const after = Number(req.query.chatAfter) || 0;
-  const game = games[current.name];
-  res.json({
-    me: req.user,
-    game: { name: current.name, phase: current.phase },
-    view: game && current.phase !== 'idle' ? game.view(req.user) : null,
-    chat: chat.filter((m) => m.id > after),
+  // 최초 접속 시 현재 참가자 명단 및 레이스 상태 전달
+  res.write(`data: ${JSON.stringify({
+    type: 'SYNC_STATE',
+    payload: {
+      ...currentRaceState,
+      WaitingPlayers: Array.from(participants)
+    }
+  })}\n\n`);
+
+  sseClients.add(res);
+
+  req.on('close', () => {
+    sseClients.delete(res);
   });
 });
 
-app.post('/api/chat', auth, (req, res) => {
-  const text = str(req.body.text);
-  if (!text || text.length > CHAT_MAX_LEN) return res.status(400).json({ error: `채팅은 1~${CHAT_MAX_LEN}자입니다` });
-  const now = Date.now();
-  if (now - (lastChatAt.get(req.user.id) ?? 0) < CHAT_COOLDOWN_MS) return res.status(429).json({ error: '3초에 한 번만 보낼 수 있습니다' });
-  lastChatAt.set(req.user.id, now);
-  chat.push({ id: ++chatSeq, ffxivId: req.user.ffxivId, text, at: now });
-  if (chat.length > CHAT_KEEP) chat.shift();
-  res.json({ ok: true });
-});
-
-app.post('/api/act', auth, (req, res) => {
-  const game = games[current.name];
-  if (!game || current.phase !== 'playing') return res.status(400).json({ error: '지금은 제출할 수 없습니다' });
-  try {
-    game.act(req.user, req.body.input);
-  } catch (e) {
-    return res.status(400).json({ error: e.message });
+// ============================================================================
+// 2. 유저 참가 등록 API (유저가 본인 닉네임으로 참가할 때 호출)
+// ============================================================================
+app.post('/api/marble-race/join', (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 30);
+  if (currentRaceState.status === 'running') {
+    return res.status(409).json({ ok: false, message: '경기 중에는 참가할 수 없습니다.' });
   }
-  db.prepare("UPDATE users SET participated_at = datetime('now') WHERE id = ? AND participated_at IS NULL").run(req.user.id);
+  if (!name) {
+    return res.status(400).json({ ok: false, message: '닉네임을 입력해 주세요.' });
+  }
+
+  if (participants.size >= 40 && !participants.has(name)) {
+    return res.status(400).json({ ok: false, message: '참가자는 최대 40명까지 가능합니다.' });
+  }
+  participants.add(name);
+  const playerList = Array.from(participants);
+
+  broadcast('PLAYERS_UPDATED', { players: playerList });
+  res.json({ ok: true, players: playerList });
+});
+
+// 현재 대기 중인 참가자 목록 조회
+app.get('/api/marble-race/players', (req, res) => {
+  res.json({
+    ok: true,
+    players: Array.from(participants),
+    currentRaceState
+  });
+});
+
+// ============================================================================
+// 3. 관리자(admin.html) 전용: 트랙 & 방해공작 배수 결정 후 레이스 시작 API
+// ============================================================================
+app.post('/api/marble-race/start', (req, res) => {
+  const { trackId = 1, hazardMultiplier = 1, players, adminKey } = req.body;
+
+  // 관리자의 별도 헤더 인증을 필수로 요구한다.
+  if (!isRaceAdmin(req) || (adminKey && adminKey !== ADMIN_PASSWORD)) {
+    return res.status(403).json({ ok: false, message: '관리자 인증이 필요합니다.' });
+  }
+  if (currentRaceState.status === 'running') {
+    return res.status(409).json({ ok: false, message: '이미 경기가 진행 중입니다.' });
+  }
+
+  // 관리자 페이지에서 직접 넘긴 명단이 있으면 사용, 없으면 참가 신청한 유저 목록 사용
+  let finalPlayers = Array.isArray(players) && players.length > 0 ? players : Array.from(participants);
+  finalPlayers = [...new Set(finalPlayers.map((name) => String(name).trim()).filter(Boolean))];
+  if (finalPlayers.length === 0 || finalPlayers.length > 40) {
+    return res.status(400).json({ ok: false, message: '참가자는 1~40명이어야 합니다.' });
+  }
+
+  const selectedTrack = Number(trackId);
+  const selectedMultiplier = Number(hazardMultiplier);
+  if (![1, 2, 3].includes(selectedTrack) || ![1, 2, 3].includes(selectedMultiplier)) {
+    return res.status(400).json({ ok: false, message: '트랙과 방해 배수를 확인해 주세요.' });
+  }
+
+  // 지연 수신 클라이언트도 같은 시뮬레이션 프레임에서 출발하도록 시작 시각을 조금 뒤로 둔다.
+  const startedAt = Date.now() + 1500;
+  const seed = `festa-${crypto.randomBytes(12).toString('hex')}`;
+
+  currentRaceState = {
+    status: 'running',
+    seed,
+    trackId: selectedTrack,
+    hazardMultiplier: selectedMultiplier,
+    players: finalPlayers,
+    startedAt
+  };
+
+  if (raceEndTimer) clearTimeout(raceEndTimer);
+  raceEndTimer = setTimeout(() => {
+    if (currentRaceState.status !== 'running' || currentRaceState.startedAt !== startedAt) return;
+    currentRaceState = { ...currentRaceState, status: 'finished', finishedAt: startedAt + 60000 };
+    broadcast('FINISH_MARBLE_RACE', currentRaceState);
+  }, Math.max(0, startedAt + 60000 - Date.now()));
+
+  // 전체 접속자에게 즉시 레이스 시작 신호 브로드캐스트!
+  broadcast('START_MARBLE_RACE', currentRaceState);
+
+  res.json({ ok: true, race: currentRaceState });
+});
+
+// 관리자용 경마 상태 조회
+app.get('/api/marble-race/admin-state', requireRaceAdmin, (req, res) => {
+  res.json({ ok: true, race: currentRaceState, players: Array.from(participants) });
+});
+
+// 관리자용 참가자 초기화 API
+app.post('/api/marble-race/reset', requireRaceAdmin, (req, res) => {
+  if (raceEndTimer) clearTimeout(raceEndTimer);
+  raceEndTimer = null;
+  participants.clear();
+  currentRaceState = { status: 'waiting', seed: null, trackId: 1, hazardMultiplier: 1, players: [], startedAt: null };
+  broadcast('PLAYERS_UPDATED', { players: [] });
   res.json({ ok: true });
 });
 
-// ---- 운영자 ----
-app.post('/api/admin/game', admin, (req, res) => {
-  if (!games[req.body.name]) return res.status(400).json({ error: '없는 게임입니다' });
-  Object.assign(current, { name: req.body.name, phase: 'idle' });
-  res.json(current);
+// ============================================================================
+// 서버 실행
+// ============================================================================
+app.listen(PORT, () => {
+  console.log(`====================================================`);
+  console.log(`🚀 DesertFesta 서버가 실행되었습니다! (Port: ${PORT})`);
+  console.log(`👉 구슬 경마 화면: http://localhost:${PORT}/games/marble-race/index.html`);
+  console.log(`👉 메인 화면:      http://localhost:${PORT}/index.html`);
+  console.log(`👉 관리자 화면:    http://localhost:${PORT}/admin.html`);
+  console.log(`====================================================`);
 });
-
-app.post('/api/admin/start', admin, (req, res) => {
-  const game = games[current.name];
-  if (!game) return res.status(400).json({ error: '게임을 먼저 고르세요' });
-  game.start();
-  current.phase = 'playing';
-  res.json(current);
-});
-
-app.post('/api/admin/resolve', admin, (req, res) => {
-  if (current.phase !== 'playing') return res.status(400).json({ error: '진행 중인 판이 없습니다' });
-  games[current.name].resolve();
-  current.phase = 'result';
-  res.json(current);
-});
-
-app.get('/api/admin/state', admin, (req, res) => res.json(current));
-
-app.get('/api/admin/export', admin, (req, res) => {
-  const rows = db.prepare('SELECT ffxiv_id, email, pepero, participated_at FROM users WHERE participated_at IS NOT NULL ORDER BY participated_at').all();
-  const esc = (v) => `"${String(v).replaceAll('"', '""')}"`;
-  const csv = ['ffxiv_id,email,pepero,participated_at', ...rows.map((r) => [r.ffxiv_id, r.email, r.pepero, r.participated_at].map(esc).join(','))].join('\n');
-  res.type('text/csv; charset=utf-8').attachment('participants.csv').send('﻿' + csv);
-});
-
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: '서버 오류' });
-});
-
-app.listen(PORT, () => console.log(`http://localhost:${PORT}`));

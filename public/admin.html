@@ -32,6 +32,17 @@
   <button class="btn" id="export">참여자 CSV 받기</button>
 </div>
 
+<div class="card" id="marble-admin" style="margin-top:16px">
+  <h2>구슬 경마 운영</h2>
+  <p id="marble-state" class="muted">상태 확인 중…</p>
+  <div class="row">
+    <label>트랙<select id="marble-track"><option value="1">코스타 델 솔</option><option value="2">림사 로민사</option><option value="3">골드 소서</option></select></label>
+    <label>방해 배수<select id="marble-hazard"><option value="1">1x</option><option value="2">2x</option><option value="3">3x</option></select></label>
+  </div>
+  <div class="row"><button class="btn primary" id="marble-start">경마 시작</button><button class="btn" id="marble-reset">참가자 초기화</button></div>
+  <p id="marble-players" class="muted"></p>
+</div>
+
 <div id="toast" role="status" hidden></div>
 
 <script>
@@ -47,7 +58,7 @@ async function call(method, path, body) {
     headers: { 'content-type': 'application/json', 'x-admin-password': $('#pw').value },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? '오류가 났습니다');
+  if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error ?? data.message ?? '오류가 났습니다'); }
   return res;
 }
 
@@ -75,7 +86,36 @@ $('#export').onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 
-setInterval(() => { if ($('#pw').value) call('GET', '/api/admin/state').then((r) => r.json()).then(show).catch(() => {}); }, 2000);
+async function refreshMarbleState() {
+  if (!$('#pw').value) return;
+  try {
+    const data = await (await call('GET', '/api/marble-race/admin-state')).json();
+    const race = data.race;
+    $('#marble-state').textContent = '상태: ' + race.status + ' · 참가 ' + data.players.length + '명' + (race.startedAt ? ' · 트랙 ' + race.trackId + ' · ' + race.hazardMultiplier + 'x' : '');
+    $('#marble-players').textContent = data.players.join(', ') || '참가 대기 중';
+  } catch (e) { $('#marble-state').textContent = e.message; }
+}
+$('#marble-start').onclick = async () => {
+  try {
+    const res = await call('POST', '/api/marble-race/start', {
+      trackId: Number($('#marble-track').value), hazardMultiplier: Number($('#marble-hazard').value)
+    });
+    const data = await res.json();
+    toast('경마 시작 예약 완료 · ' + data.race.players.length + '명');
+    refreshMarbleState();
+  } catch (e) { toast(e.message); }
+};
+$('#marble-reset').onclick = async () => {
+  try { await call('POST', '/api/marble-race/reset', {}); toast('참가자를 초기화했습니다'); refreshMarbleState(); }
+  catch (e) { toast(e.message); }
+};
+setInterval(() => {
+  if ($('#pw').value) {
+    call('GET', '/api/admin/state').then((r) => r.json()).then(show).catch(() => {});
+    refreshMarbleState();
+  }
+}, 2000);
+refreshMarbleState();
 </script>
 </body>
 </html>
